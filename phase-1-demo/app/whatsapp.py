@@ -3,61 +3,83 @@
 import json
 import os
 import requests
-from sqlalchemy.orm import Session
-from models import WhatsAppState, ConversationState, Patient, Appointment, AppointmentStatus
+from database import read_db, write_db, get_next_id
 from booking import get_or_create_patient, create_appointment, check_duplicate_booking, get_queue_position
 from datetime import datetime
-from sqlalchemy import func
+from typing import Dict, Any
 
 WHATSAPP_API_URL = "https://graph.instagram.com/v18.0"
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", "")
 
 
-def get_or_create_state(db: Session, phone: str) -> WhatsAppState:
+def get_or_create_state(phone: str) -> Dict[str, Any]:
     """Get or create WhatsApp conversation state for phone.
     
     Args:
-        db: Database session
         phone: Phone number
     
     Returns:
-        WhatsAppState object
+        WhatsAppState dict
     """
-    state = db.query(WhatsAppState).filter(WhatsAppState.phone == phone).first()
+    db = read_db()
     
-    if not state:
-        state = WhatsAppState(phone=phone, state=ConversationState.start)
-        db.add(state)
-        db.commit()
-        db.refresh(state)
+    # Find existing state
+    for state in db["whatsapp_states"]:
+        if state["phone"] == phone:
+            return state
+    
+    # Create new state
+    state = {
+        "id": get_next_id("whatsapp_states"),
+        "phone": phone,
+        "patient_id": None,
+        "state": "start",
+        "booking_name": None,
+        "booking_problem": None,
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+    db["whatsapp_states"].append(state)
+    write_db(db)
     
     return state
 
 
-def update_state(db: Session, phone: str, new_state: ConversationState, **kwargs):
+def update_state(phone: str, new_state: str, **kwargs):
     """Update conversation state and optional data.
     
     Args:
-        db: Database session
         phone: Phone number
         new_state: New conversation state
-        **kwargs: Additional fields to update (booking_name, booking_problem, etc.)
+        **kwargs: Additional fields to update
     """
-    state = get_or_create_state(db, phone)
-    state.state = new_state
+    db = read_db()
     
+    # Find and update state
+    for state in db["whatsapp_states"]:
+        if state["phone"] == phone:
+            state["state"] = new_state
+            state["updated_at"] = datetime.utcnow().isoformat()
+            
+            for key, value in kwargs.items():
+                if key in state:
+                    state[key] = value
+            
+            write_db(db)
+            return state
+    
+    # If not found, create new
+    state = get_or_create_state(phone)
+    state["state"] = new_state
     for key, value in kwargs.items():
-        if hasattr(state, key):
-            setattr(state, key, value)
-    
-    state.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(state)
+        if key in state:
+            state[key] = value
+    update_state(phone, new_state, **kwargs)  # Recursive call to update
 
 
 def send_whatsapp_message(phone: str, message: str) -> bool:
-    """Send WhatsApp message (requires real API token).
+    """Send WhatsApp message via Meta API.
     
     Args:
         phone: Recipient phone number
@@ -68,7 +90,7 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
     """
     if not WHATSAPP_API_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
         print(f"⚠️  WhatsApp API not configured. Would send to {phone}: {message}")
-        return True  # In demo, we pretend it was sent
+        return True  # In demo, pretend it was sent
     
     url = f"{WHATSAPP_API_URL}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {
@@ -97,18 +119,12 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
         return False
 
 
-def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
+def handle_incoming_message(phone: str, message_text: str) -> str:
     """Process incoming WhatsApp message and return response.
     
-    Implements a multi-turn conversation state machine:
-    - start → menu
-    - menu → booking_name or check_status
-    - booking_name → booking_problem
-    - booking_problem → booking_confirm
-    - booking_confirm → complete and back to menu
+    Implements a multi-turn conversation state machine.
     
     Args:
-        db: Database session
         phone: Sender phone number
         message_text: Message content
     
@@ -118,11 +134,12 @@ def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
     print(f"\n📱 Message from {phone}: {message_text}")
     
     message_text = message_text.strip().lower()
-    state = get_or_create_state(db, phone)
+    state = get_or_create_state(phone)
+    current_state = state["state"]
     
     # ==================== START STATE ====================
-    if state.state == ConversationState.start:
-        update_state(db, phone, ConversationState.menu)
+    if current_state == "start":
+        update_state(phone, "menu")
         response = (
             "🏥 Welcome to Clinic Queue Management!\n\n"
             "What would you like to do?\n"
@@ -133,15 +150,13 @@ def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
         return response
     
     # ==================== MENU STATE ====================
-    if state.state == ConversationState.menu:
+    if current_state == "menu":
         if message_text == "1":
-            # Start booking flow
-            update_state(db, phone, ConversationState.booking_name)
+            update_state(phone, "booking_name")
             response = "📝 What is your name?"
             return response
         elif message_text == "2":
-            # Check status
-            result = get_queue_position(db, phone)
+            result = get_queue_position(phone)
             if result["status"] == "error":
                 response = f"❌ {result['message']}"
             else:
@@ -159,25 +174,24 @@ def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
             return response
     
     # ==================== BOOKING NAME STATE ====================
-    if state.state == ConversationState.booking_name:
+    if current_state == "booking_name":
         if len(message_text) < 2:
             response = "❌ Name too short. Please enter your full name:"
             return response
         
-        # Store name and move to problem
-        update_state(db, phone, ConversationState.booking_problem, booking_name=message_text.title())
+        update_state(phone, "booking_problem", booking_name=message_text.title())
         response = "🏥 What is your medical problem or complaint?"
         return response
     
     # ==================== BOOKING PROBLEM STATE ====================
-    if state.state == ConversationState.booking_problem:
+    if current_state == "booking_problem":
         if len(message_text) < 3:
             response = "❌ Please describe your problem more clearly:"
             return response
         
         # Check for duplicate booking
-        if check_duplicate_booking(db, phone):
-            update_state(db, phone, ConversationState.menu)
+        if check_duplicate_booking(phone):
+            update_state(phone, "menu")
             response = (
                 "❌ You already have an appointment today!\n\n"
                 "What would you like to do next?\n"
@@ -186,34 +200,33 @@ def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
             )
             return response
         
-        # Store problem and confirm
-        update_state(db, phone, ConversationState.booking_confirm, booking_problem=message_text.title())
+        update_state(phone, "booking_confirm", booking_problem=message_text.title())
         
-        # Get state to display summary
-        state = get_or_create_state(db, phone)
+        # Get updated state
+        state = get_or_create_state(phone)
         response = (
             f"📋 Please confirm your booking:\n\n"
-            f"Name: {state.booking_name}\n"
-            f"Problem: {state.booking_problem}\n\n"
+            f"Name: {state['booking_name']}\n"
+            f"Problem: {state['booking_problem']}\n\n"
             f"Reply 'YES' to confirm or 'NO' to cancel"
         )
         return response
     
     # ==================== BOOKING CONFIRM STATE ====================
-    if state.state == ConversationState.booking_confirm:
+    if current_state == "booking_confirm":
         if message_text == "yes":
             # Create appointment
-            patient = get_or_create_patient(db, phone, state.booking_name)
-            appointment = create_appointment(db, patient, state.booking_problem)
+            patient = get_or_create_patient(phone, state["booking_name"])
+            appointment = create_appointment(patient["id"], state["booking_problem"])
             
             # Reset state
-            update_state(db, phone, ConversationState.menu)
+            update_state(phone, "menu")
             
             response = (
                 f"✅ Appointment Booked Successfully!\n\n"
-                f"🎫 Your Token: {appointment.token}\n"
-                f"👤 Name: {state.booking_name}\n"
-                f"🏥 Problem: {state.booking_problem}\n\n"
+                f"🎫 Your Token: {appointment['token']}\n"
+                f"👤 Name: {state['booking_name']}\n"
+                f"🏥 Problem: {state['booking_problem']}\n\n"
                 f"Please arrive on time. Your token will be called soon.\n\n"
                 f"What would you like to do next?\n"
                 f"1️⃣  Book Another Appointment\n"
@@ -222,8 +235,7 @@ def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
             print(f"✓ Booking confirmed for {phone}")
             return response
         elif message_text == "no":
-            # Cancel booking
-            update_state(db, phone, ConversationState.menu)
+            update_state(phone, "menu")
             response = (
                 "❌ Booking cancelled.\n\n"
                 "What would you like to do?\n"
@@ -236,7 +248,7 @@ def handle_incoming_message(db: Session, phone: str, message_text: str) -> str:
             return response
     
     # Default fallback
-    update_state(db, phone, ConversationState.menu)
+    update_state(phone, "menu")
     response = (
         "🏥 Welcome to Clinic Queue Management!\n\n"
         "What would you like to do?\n"
@@ -255,5 +267,5 @@ def verify_webhook_token(token: str) -> bool:
     Returns:
         True if token matches, False otherwise
     """
-    expected_token = os.getenv("WHATSAPP_VERIFY_TOKEN", "demo_verify_token")
+    expected_token = os.getenv("WHATSAPP_VERIFY_TOKEN", "clinic_queue_verify_token_2026_secure")
     return token == expected_token

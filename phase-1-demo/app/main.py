@@ -1,28 +1,14 @@
 """Main FastAPI application with all routes."""
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
+from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import os
 from datetime import datetime
+import json
 
-# Import database and models
-from database import init_db, get_db, Base, engine
-from models import Patient, Appointment, AppointmentStatus
-
-# Import schemas
-from schemas import (
-    SendOTPRequest,
-    VerifyOTPRequest,
-    OTPResponse,
-    BookingRequest,
-    BookingResponse,
-    QueueStatusResponse,
-    DoctorDashboardResponse,
-    HealthCheckResponse,
-)
-
-# Import services
+# Import database and services
+from database import init_db, read_db
 from otp import create_otp, verify_otp
 from booking import (
     get_or_create_patient,
@@ -31,12 +17,12 @@ from booking import (
     get_queue_position,
     get_all_appointments,
 )
-from whatsapp import handle_incoming_message, verify_webhook_token
+from whatsapp import handle_incoming_message, verify_webhook_token, send_whatsapp_message
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Clinic Queue Management System",
-    description="Demo - Phase 1: Book appointments, track queue, WhatsApp integration",
+    description="Phase 1 Demo - Book appointments, track queue, WhatsApp integration",
     version="1.0.0",
 )
 
@@ -49,69 +35,98 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # Initialize database on startup
 @app.on_event("startup")
 def startup():
     """Initialize database on app startup."""
-    print("\n" + "="*50)
-    print("🏥 Clinic Queue Management System - Phase 1")
-    print("="*50)
+    print("\n" + "="*60)
+    print("🏥 Clinic Queue Management System - Phase 1 DEMO")
+    print("="*60)
     init_db()
-    print("🚀 Application started")
-    print("📖 API Docs: http://localhost:8000/docs")
-    print("="*50 + "\n")
+    print("✓ Database initialized")
+    print("\n📍 API Endpoints:")
+    print("   • Swagger UI: /docs")
+    print("   • ReDoc: /redoc")
+    print("   • Health: /health")
+    print("\n🌐 Deployment:")
+    print("   • Local: http://localhost:8000")
+    print("   • Live: https://clinic-queue-system.onrender.com")
+    print("="*60 + "\n")
 
 
-# ==================== HEALTH CHECK ====================
+# ==================== ROOT & HEALTH ====================
 
-@app.get("/health", response_model=HealthCheckResponse)
+@app.get("/")
+def root():
+    """Root endpoint with API information."""
+    return {
+        "name": "Clinic Queue Management System",
+        "version": "1.0.0",
+        "phase": "1 - DEMO",
+        "docs": "/docs",
+        "status": "live",
+        "endpoints": {
+            "health": "/health",
+            "auth": ["/send-otp", "/verify-otp"],
+            "booking": ["/book"],
+            "queue": ["/queue-status"],
+            "doctor": ["/doctor/appointments"],
+            "whatsapp": ["/webhook"],
+            "testing": ["/test-whatsapp"]
+        }
+    }
+
+
+@app.get("/health")
 def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
         "message": "Clinic Queue System is running",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "timestamp": datetime.utcnow().isoformat()
     }
 
 
 # ==================== OTP ENDPOINTS ====================
 
-@app.post("/send-otp", response_model=OTPResponse)
-def send_otp(request: SendOTPRequest, db: Session = Depends(get_db)):
+@app.get("/send-otp")
+def send_otp(phone: str = Query(..., description="Phone number with country code")):
     """Send OTP to phone number.
     
     Args:
-        request: SendOTPRequest with phone number
-        db: Database session
+        phone: Phone number (with country code)
     
     Returns:
-        OTPResponse with status and message
+        JSON with OTP (demo mode only)
     """
     try:
-        otp_code = create_otp(db, request.phone)
+        otp_code = create_otp(phone)
         return {
             "status": "success",
-            "message": f"OTP sent to {request.phone}",
-            "otp": otp_code  # Only in development
+            "message": f"OTP sent to {phone}",
+            "otp": otp_code,  # Only in demo
+            "expires_in_minutes": int(os.getenv("OTP_EXPIRY_MINUTES", 10))
         }
     except Exception as e:
         print(f"❌ Error sending OTP: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/verify-otp", response_model=OTPResponse)
-def verify_otp_endpoint(request: VerifyOTPRequest, db: Session = Depends(get_db)):
+@app.get("/verify-otp")
+def verify_otp_endpoint(phone: str = Query(...), otp: str = Query(..., min_length=6, max_length=6)):
     """Verify OTP code.
     
     Args:
-        request: VerifyOTPRequest with phone and OTP
-        db: Database session
+        phone: Phone number
+        otp: 6-digit OTP
     
     Returns:
-        OTPResponse with verification status
+        JSON with verification status
     """
     try:
-        if verify_otp(db, request.phone, request.otp):
+        if verify_otp(phone, otp):
             return {
                 "status": "success",
                 "message": "OTP verified successfully"
@@ -125,36 +140,42 @@ def verify_otp_endpoint(request: VerifyOTPRequest, db: Session = Depends(get_db)
 
 # ==================== BOOKING ENDPOINTS ====================
 
-@app.post("/book", response_model=BookingResponse)
-def book_appointment(request: BookingRequest, db: Session = Depends(get_db)):
+@app.get("/book")
+def book_appointment(
+    name: str = Query(..., min_length=2),
+    phone: str = Query(...),
+    problem: str = Query(..., min_length=5)
+):
     """Book an appointment.
     
     Args:
-        request: BookingRequest with name, phone, problem
-        db: Database session
+        name: Patient name
+        phone: Patient phone
+        problem: Medical problem
     
     Returns:
-        BookingResponse with token and status
+        JSON with token and appointment details
     """
     try:
         # Check for duplicate booking
-        if check_duplicate_booking(db, request.phone):
+        if check_duplicate_booking(phone):
             raise HTTPException(
                 status_code=400,
                 detail="You already have an appointment for today"
             )
         
         # Create or get patient
-        patient = get_or_create_patient(db, request.phone, request.name)
+        patient = get_or_create_patient(phone, name)
         
         # Create appointment
-        appointment = create_appointment(db, patient, request.problem)
+        appointment = create_appointment(patient["id"], problem)
         
         return {
             "status": "success",
-            "token": appointment.token,
-            "message": f"✓ Appointment booked! Your token: {appointment.token}",
-            "patient_id": patient.id
+            "token": appointment["token"],
+            "message": f"✓ Appointment booked! Your token: {appointment['token']}",
+            "patient_id": patient["id"],
+            "appointment_id": appointment["id"]
         }
     except HTTPException:
         raise
@@ -165,19 +186,18 @@ def book_appointment(request: BookingRequest, db: Session = Depends(get_db)):
 
 # ==================== QUEUE ENDPOINTS ====================
 
-@app.get("/queue-status", response_model=QueueStatusResponse)
-def get_queue_status(phone: str = Query(...), db: Session = Depends(get_db)):
+@app.get("/queue-status")
+def get_queue_status(phone: str = Query(...)):
     """Get queue status for a patient.
     
     Args:
         phone: Patient phone number
-        db: Database session
     
     Returns:
-        QueueStatusResponse with position and wait time
+        JSON with queue position and wait time
     """
     try:
-        result = get_queue_position(db, phone)
+        result = get_queue_position(phone)
         if result.get("status") == "error":
             raise HTTPException(status_code=404, detail=result["message"])
         return result
@@ -190,21 +210,19 @@ def get_queue_status(phone: str = Query(...), db: Session = Depends(get_db)):
 
 # ==================== DOCTOR ENDPOINTS ====================
 
-@app.get("/doctor/appointments", response_model=DoctorDashboardResponse)
-def doctor_appointments(db: Session = Depends(get_db)):
+@app.get("/doctor/appointments")
+def doctor_appointments():
     """Get all appointments (doctor dashboard).
     
-    Args:
-        db: Database session
-    
     Returns:
-        DoctorDashboardResponse with all appointments
+        JSON with all appointments
     """
     try:
-        appointments = get_all_appointments(db)
+        appointments = get_all_appointments()
         return {
             "status": "success",
             "count": len(appointments),
+            "timestamp": datetime.utcnow().isoformat(),
             "appointments": appointments
         }
     except Exception as e:
@@ -215,19 +233,19 @@ def doctor_appointments(db: Session = Depends(get_db)):
 # ==================== WHATSAPP WEBHOOK ====================
 
 @app.get("/webhook")
-def webhook_verify(request: Request):
-    """WhatsApp webhook verification (GET request).
+def webhook_verify(
+    hub_mode: str = Query(None, alias="hub.mode"),
+    hub_token: str = Query(None, alias="hub.verify_token"),
+    hub_challenge: str = Query(None, alias="hub.challenge")
+):
+    """WhatsApp webhook verification (GET request from Meta).
     
-    Meta sends GET request with hub_mode, hub_verify_token, hub_challenge.
+    Meta sends GET request to verify webhook endpoint.
     """
     try:
-        mode = request.query_params.get("hub.mode")
-        token = request.query_params.get("hub.verify_token")
-        challenge = request.query_params.get("hub.challenge")
-        
-        if mode == "subscribe" and verify_webhook_token(token):
+        if hub_mode == "subscribe" and verify_webhook_token(hub_token):
             print(f"✓ WhatsApp webhook verified")
-            return int(challenge)
+            return int(hub_challenge)
         else:
             print(f"❌ Invalid webhook verification attempt")
             return {"status": "error", "message": "Invalid verification"}
@@ -237,19 +255,16 @@ def webhook_verify(request: Request):
 
 
 @app.post("/webhook")
-async def webhook_receive(request: Request, db: Session = Depends(get_db)):
-    """WhatsApp webhook to receive messages (POST request).
+async def webhook_receive(request: Request):
+    """WhatsApp webhook to receive messages (POST request from Meta).
     
     Meta sends incoming messages to this endpoint.
     """
     try:
         body = await request.json()
-        
-        # Log incoming webhook
-        print(f"\n📨 Webhook received: {body}")
+        print(f"\n📨 Webhook received: {json.dumps(body, indent=2)[:200]}...")
         
         # Extract message information
-        # Expected structure: body['entry'][0]['changes'][0]['value']['messages'][0]
         try:
             messages = body.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {}).get("messages", [])
             
@@ -261,13 +276,13 @@ async def webhook_receive(request: Request, db: Session = Depends(get_db)):
             message_text = message.get("text", {}).get("body", "")
             
             if phone and message_text:
-                # Process message and get response
-                response = handle_incoming_message(db, phone, message_text)
+                # Process message
+                response = handle_incoming_message(phone, message_text)
+                print(f"✓ Response prepared for {phone}: {response[:50]}...")
                 
-                # In production, send response via WhatsApp API
-                # For demo, just log it
-                print(f"✓ Response prepared: {response[:50]}...")
-                
+                # Send response via WhatsApp API
+                send_whatsapp_message(phone, response)
+        
         except (IndexError, KeyError, TypeError) as e:
             print(f"⚠️  Webhook structure unexpected: {str(e)}")
         
@@ -276,28 +291,33 @@ async def webhook_receive(request: Request, db: Session = Depends(get_db)):
         
     except Exception as e:
         print(f"❌ Error processing webhook: {str(e)}")
-        return {"status": "ok"}  # Still return ok to prevent retries
+        return {"status": "ok"}  # Still return ok to prevent Meta retries
 
 
-# ==================== ROOT ENDPOINT ====================
+# ==================== TESTING ENDPOINT ====================
 
-@app.get("/")
-def root():
-    """Root endpoint with API information."""
-    return {
-        "name": "Clinic Queue Management System",
-        "version": "1.0.0",
-        "phase": "1 - DEMO",
-        "docs": "/docs",
-        "health": "/health",
-        "endpoints": {
-            "auth": ["/send-otp", "/verify-otp"],
-            "booking": ["/book"],
-            "queue": ["/queue-status"],
-            "doctor": ["/doctor/appointments"],
-            "whatsapp": ["/webhook"]
+@app.get("/test-whatsapp")
+def test_whatsapp(phone: str = Query(...), message: str = Query(...)):
+    """Test WhatsApp chatbot locally (for testing without real WhatsApp).
+    
+    Args:
+        phone: Test phone number
+        message: Test message
+    
+    Returns:
+        Bot response
+    """
+    try:
+        response = handle_incoming_message(phone, message)
+        return {
+            "status": "success",
+            "phone": phone,
+            "message": message,
+            "response": response
         }
-    }
+    except Exception as e:
+        print(f"❌ Error testing WhatsApp: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

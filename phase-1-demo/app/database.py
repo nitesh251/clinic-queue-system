@@ -1,47 +1,57 @@
-"""Database configuration and session management."""
+"""JSON file-based database for Phase 1 demo."""
 
+import json
 import os
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.pool import StaticPool
+from datetime import datetime
+from typing import Dict, List, Any
 
-# Get database URL from environment or use default
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./clinic.db")
-
-print(f"🗄️  Database: {DATABASE_URL}")
-
-# For SQLite, we need special configuration
-if "sqlite" in DATABASE_URL:
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    # Enable foreign keys for SQLite
-    @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, connection_record):
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-else:
-    engine = create_engine(DATABASE_URL)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Base class for all models
-Base = declarative_base()
-
-
-def get_db():
-    """Dependency for FastAPI to inject database session."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+DATA_FILE = "clinic_data.json"
 
 
 def init_db():
-    """Create all database tables."""
-    Base.metadata.create_all(bind=engine)
-    print("✓ Database tables initialized")
+    """Initialize database file if it doesn't exist."""
+    if not os.path.exists(DATA_FILE):
+        default_data = {
+            "patients": [],
+            "appointments": [],
+            "otps": [],
+            "whatsapp_states": []
+        }
+        with open(DATA_FILE, 'w') as f:
+            json.dump(default_data, f, indent=2)
+        print(f"✓ Database file created: {DATA_FILE}")
+    else:
+        print(f"✓ Database file exists: {DATA_FILE}")
+
+
+def read_db() -> Dict[str, Any]:
+    """Read entire database."""
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"❌ Error reading database: {e}")
+        return {
+            "patients": [],
+            "appointments": [],
+            "otps": [],
+            "whatsapp_states": []
+        }
+
+
+def write_db(data: Dict[str, Any]):
+    """Write entire database."""
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"❌ Error writing database: {e}")
+
+
+def get_next_id(collection: str) -> int:
+    """Get next ID for a collection."""
+    db = read_db()
+    items = db.get(collection, [])
+    if not items:
+        return 1
+    return max(item.get('id', 0) for item in items) + 1
