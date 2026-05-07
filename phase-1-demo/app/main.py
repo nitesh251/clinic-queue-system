@@ -8,16 +8,16 @@ from datetime import datetime
 import json
 
 # Import database and services
-from database import init_db, read_db
-from otp import create_otp, verify_otp
-from booking import (
+from app.database import init_db, read_db
+from app.otp import create_otp, verify_otp
+from app.booking import (
     get_or_create_patient,
     create_appointment,
     check_duplicate_booking,
     get_queue_position,
     get_all_appointments,
 )
-from whatsapp import handle_incoming_message, verify_webhook_token, send_whatsapp_message
+from app.whatsapp import handle_incoming_message, verify_webhook_token, send_whatsapp_message
 
 # Initialize FastAPI app
 app = FastAPI(

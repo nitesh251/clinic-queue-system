@@ -3,8 +3,8 @@
 import json
 import os
 import requests
-from database import read_db, write_db, get_next_id
-from booking import get_or_create_patient, create_appointment, check_duplicate_booking, get_queue_position
+from app.database import read_db, write_db, get_next_id
+from app.booking import get_or_create_patient, create_appointment, check_duplicate_booking, get_queue_position
 from datetime import datetime
 from typing import Dict, Any
 

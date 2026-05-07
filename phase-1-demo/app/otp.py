@@ -2,7 +2,7 @@
 
 import random
 from datetime import datetime, timedelta
-from database import read_db, write_db, get_next_id
+from app.database import read_db, write_db, get_next_id
 import os
 
 OTP_EXPIRY_MINUTES = int(os.getenv("OTP_EXPIRY_MINUTES", "10"))

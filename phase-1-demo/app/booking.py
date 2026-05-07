@@ -1,7 +1,7 @@
 """Appointment booking and queue management logic."""
 
 from datetime import datetime
-from database import read_db, write_db, get_next_id
+from app.database import read_db, write_db, get_next_id
 from typing import Dict, List, Any
 
 
