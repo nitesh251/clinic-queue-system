@@ -8,7 +8,7 @@ from app.booking import get_or_create_patient, create_appointment, check_duplica
 from datetime import datetime
 from typing import Dict, Any
 
-WHATSAPP_API_URL = "https://graph.instagram.com/v18.0"
+WHATSAPP_API_URL = "https://graph.facebook.com/v22.0"
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN", "")
 
