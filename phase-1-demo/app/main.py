@@ -3,6 +3,7 @@
 from fastapi import FastAPI, Query, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.responses import PlainTextResponse
 import os
 from datetime import datetime
 import json
@@ -232,27 +233,47 @@ def doctor_appointments():
 
 # ==================== WHATSAPP WEBHOOK ====================
 
+# @app.get("/webhook")
+# def webhook_verify(
+#     hub_mode: str = Query(None, alias="hub.mode"),
+#     hub_token: str = Query(None, alias="hub.verify_token"),
+#     hub_challenge: str = Query(None, alias="hub.challenge")
+# ):
+#     """WhatsApp webhook verification (GET request from Meta).
+#
+#     Meta sends GET request to verify webhook endpoint.
+#     """
+#     try:
+#         if hub_mode == "subscribe" and verify_webhook_token(hub_token):
+#             print(f"✓ WhatsApp webhook verified")
+#             return int(hub_challenge)
+#         else:
+#             print(f"❌ Invalid webhook verification attempt")
+#             return {"status": "error", "message": "Invalid verification"}
+#     except Exception as e:
+#         print(f"❌ Error verifying webhook: {str(e)}")
+#         raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/webhook")
 def webhook_verify(
     hub_mode: str = Query(None, alias="hub.mode"),
     hub_token: str = Query(None, alias="hub.verify_token"),
     hub_challenge: str = Query(None, alias="hub.challenge")
 ):
-    """WhatsApp webhook verification (GET request from Meta).
-    
-    Meta sends GET request to verify webhook endpoint.
-    """
-    try:
-        if hub_mode == "subscribe" and verify_webhook_token(hub_token):
-            print(f"✓ WhatsApp webhook verified")
-            return int(hub_challenge)
-        else:
-            print(f"❌ Invalid webhook verification attempt")
-            return {"status": "error", "message": "Invalid verification"}
-    except Exception as e:
-        print(f"❌ Error verifying webhook: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """WhatsApp webhook verification."""
 
+    print("MODE:", hub_mode)
+    print("TOKEN:", hub_token)
+    print("CHALLENGE:", hub_challenge)
+
+    verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+
+    if hub_mode == "subscribe" and hub_token == verify_token:
+        print("✓ WhatsApp webhook verified")
+        return PlainTextResponse(content=hub_challenge)
+
+    print("❌ Invalid webhook verification attempt")
+    return PlainTextResponse( content="Verification failed", status_code=403 )
 
 @app.post("/webhook")
 async def webhook_receive(request: Request):
