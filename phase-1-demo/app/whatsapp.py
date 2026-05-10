@@ -88,10 +88,6 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
     Returns:
         True if sent successfully, False otherwise
     """
-    print("TOKEN EXISTS:", bool(WHATSAPP_API_TOKEN))
-    print("PHONE ID:", WHATSAPP_PHONE_NUMBER_ID)
-    print("URL:", url)
-    print("PAYLOAD:", payload)
     if not WHATSAPP_API_TOKEN or not WHATSAPP_PHONE_NUMBER_ID:
         print(f"⚠️  WhatsApp API not configured. Would send to {phone}: {message}")
         return True  # In demo, pretend it was sent
@@ -109,6 +105,10 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
         "type": "text",
         "text": {"preview_url": False, "body": message}
     }
+    print("TOKEN EXISTS:", bool(WHATSAPP_API_TOKEN))
+    print("PHONE ID:", WHATSAPP_PHONE_NUMBER_ID)
+    print("URL:", url)
+    print("PAYLOAD:", payload)
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
