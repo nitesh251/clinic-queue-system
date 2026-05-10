@@ -112,7 +112,7 @@ def send_whatsapp_message(phone: str, message: str) -> bool:
     
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
+        if response.status_code in [200, 201]:
             print(f"✓ WhatsApp message sent to {phone}")
             return True
         else:
