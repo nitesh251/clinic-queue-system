@@ -52,7 +52,7 @@ def startup():
     print("   • Health: /health")
     print("\n🌐 Deployment:")
     print("   • Local: http://localhost:8000")
-    print("   • Live: https://clinic-queue-system.onrender.com")
+    print("   • Live: https://clinic-queue-system-wtir.onrender.com")
     print("="*60 + "\n")
 
 
